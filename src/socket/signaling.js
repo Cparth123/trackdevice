@@ -90,9 +90,9 @@ async function initializeSignaling(io) {
             throw new Error("Invalid password");
           }
 
-          if (!device.isOnline) {
-            throw new Error("Device is offline");
-          }
+          // if (!device.isOnline) {
+          //   throw new Error("Device is offline");
+          // }
 
           const viewers = getViewerSet(deviceId);
           const maxViewers = Number(process.env.MAX_VIEWERS_PER_DEVICE || 5);
