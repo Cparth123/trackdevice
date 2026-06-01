@@ -51,6 +51,18 @@ router.get('/:deviceId/status', async (req, res, next) => {
   }
 });
 
+router.get('/:deviceId/data', async (req, res, next) => {
+  try {
+    const device = await Device.findOne({ deviceId: req.params.deviceId });
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+    return res.json({ deviceData: device.deviceData || {} });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post('/:deviceId/stream', async (req, res, next) => {
   try {
     const { password, isStreaming } = req.body;

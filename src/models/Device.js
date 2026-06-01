@@ -40,6 +40,10 @@ const DeviceSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    deviceData: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     lastSeen: {
       type: Date,
       default: Date.now,
@@ -66,6 +70,7 @@ DeviceSchema.methods.toPublicJSON = function toPublicJSON() {
     appVersion: this.appVersion,
     isOnline: this.isOnline,
     isStreaming: this.isStreaming,
+    deviceData: this.deviceData || {},
     lastSeen: this.lastSeen,
     totalSessions: this.totalSessions,
   };

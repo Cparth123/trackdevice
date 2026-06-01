@@ -53,6 +53,32 @@ async function initializeSignaling(io) {
       }
     });
 
+    socket.on("device:data", async ({ deviceId, data }, ack) => {
+      try {
+        if (!deviceSockets.has(socket.id)) {
+          throw new Error("Only registered devices may send device data");
+        }
+
+        const device = await Device.findOne({ deviceId });
+        if (!device) {
+          throw new Error("Device not found");
+        }
+
+        device.deviceData = data || {};
+        device.lastSeen = new Date();
+        await device.save();
+
+        io.to(`viewers:${deviceId}`).emit("device:data", {
+          deviceId,
+          data: device.deviceData,
+        });
+
+        ack?.({ ok: true });
+      } catch (error) {
+        ack?.({ ok: false, error: error.message });
+      }
+    });
+
     socket.on("stream:started", async ({ deviceId }, ack) => {
       try {
         await setStreaming(deviceId, true);
