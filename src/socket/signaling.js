@@ -1187,6 +1187,71 @@ async function initializeSignaling(io) {
       }
     });
 
+
+    socket.on("viewer:authenticate", async ({ deviceId, password, viewerLabel }, ack) => {
+      try {
+        logger.info(`Viewer authentication attempt for device: ${deviceId}`);
+
+        const device = await Device.findOne({ deviceId });
+        if (!device) {
+          throw new Error("Device not found");
+        }
+
+        const valid = await device.verifyPassword(password);
+        if (!valid) {
+          throw new Error("Invalid password");
+        }
+
+        if (!device.isOnline) {
+          throw new Error("Device is offline");
+        }
+
+        const viewers = getViewerSet(deviceId);
+        const maxViewers = Number(process.env.MAX_VIEWERS_PER_DEVICE || 5);
+        if (viewers.size >= maxViewers) {
+          throw new Error("Maximum viewers reached");
+        }
+
+        viewers.add(socket.id);
+        viewerSockets.set(socket.id, { deviceId });
+        socket.join(`viewers:${deviceId}`);
+
+        await Session.create({
+          deviceId,
+          viewerSocketId: socket.id,
+          viewerLabel: viewerLabel || "Browser Viewer",
+          viewerIp: socket.handshake.address,
+          status: "pending",
+          startedAt: new Date(),
+        });
+
+        logger.info(`Viewer authenticated for device ${deviceId}, viewers: ${viewers.size}`);
+
+        if (ack) {
+          ack({
+            ok: true,
+            device: device.toPublicJSON(),
+            viewerSocketId: socket.id,
+          });
+        }
+
+        // If device is streaming, request stream immediately
+        if (device.isStreaming) {
+          io.to(`device:${deviceId}`).emit("viewer:request-stream", {
+            viewerSocketId: socket.id,
+            viewerLabel: viewerLabel || "Browser Viewer",
+            viewerCount: viewers.size,
+          });
+        }
+      } catch (error) {
+        logger.error(`Viewer authentication failed: ${error.message}`);
+        if (ack) {
+          ack({ ok: false, error: error.message });
+        }
+      }
+    });
+
+
     // Disconnect
     socket.on("disconnect", async () => {
       const deviceId = deviceSockets.get(socket.id);
