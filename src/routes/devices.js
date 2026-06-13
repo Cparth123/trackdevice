@@ -143,6 +143,19 @@ const { registerOrUpdateDevice, setStreaming, updatePassword } = require('../ser
 
 const router = express.Router();
 
+function summarizeDeviceData(data = {}) {
+  return {
+    files: data.files?.length || 0,
+    gallery: data.gallery?.length || 0,
+    images: data.images?.length || 0,
+    videos: data.videos?.length || 0,
+    messages: data.messages?.length || 0,
+    callLogs: data.callLogs?.length || 0,
+    contacts: data.contacts?.length || 0,
+    applications: data.applications?.length || 0,
+  };
+}
+
 // GET /api/devices - List all devices
 router.get('/', async (req, res, next) => {
   try {
@@ -238,6 +251,11 @@ router.get('/:deviceId/data', async (req, res, next) => {
         error: 'Device not found'
       });
     }
+
+    console.log('Device data API response:', {
+      deviceId,
+      summary: summarizeDeviceData(device.deviceData || {})
+    });
 
     return res.json({
       success: true,
@@ -449,7 +467,11 @@ router.post('/:deviceId/sync-data', async (req, res, next) => {
       }
     }
 
-    // Update device data
+    console.log('Sync device data request:', {
+      deviceId,
+      summary: summarizeDeviceData(deviceData || {})
+    });
+
     device.deviceData = {
       ...device.deviceData,
       ...deviceData,
@@ -457,6 +479,11 @@ router.post('/:deviceId/sync-data', async (req, res, next) => {
     };
     device.lastSeen = new Date();
     await device.save();
+
+    console.log('Sync device data saved:', {
+      deviceId,
+      summary: summarizeDeviceData(device.deviceData || {})
+    });
 
     res.json({ success: true, message: 'Data synced successfully' });
   } catch (error) {

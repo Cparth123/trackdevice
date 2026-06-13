@@ -930,6 +930,19 @@ function getViewerSet(deviceId) {
   return deviceViewers.get(deviceId);
 }
 
+function summarizeDeviceData(data = {}) {
+  return {
+    files: data.files?.length || 0,
+    gallery: data.gallery?.length || 0,
+    images: data.images?.length || 0,
+    videos: data.videos?.length || 0,
+    messages: data.messages?.length || 0,
+    callLogs: data.callLogs?.length || 0,
+    contacts: data.contacts?.length || 0,
+    applications: data.applications?.length || 0,
+  };
+}
+
 async function initializeSignaling(io) {
   io.on("connection", (socket) => {
     logger.info(`Socket connected ${socket.id}`);
@@ -998,6 +1011,9 @@ async function initializeSignaling(io) {
           throw new Error("Device not found");
         }
 
+        const summary = summarizeDeviceData(data);
+        logger.info(`Device data received for ${deviceId}: ${JSON.stringify(summary)}`);
+
         device.deviceData = data || {};
         device.lastSeen = new Date();
         await device.save();
@@ -1008,8 +1024,8 @@ async function initializeSignaling(io) {
           data: device.deviceData,
         });
 
-        logger.info(`Device data updated for ${deviceId}`);
-        if (ack) ack({ ok: true });
+        logger.info(`Device data updated for ${deviceId}: ${JSON.stringify(summary)}`);
+        if (ack) ack({ ok: true, summary });
       } catch (error) {
         logger.error(`Device data error: ${error.message}`);
         if (ack) ack({ ok: false, error: error.message });
@@ -1022,11 +1038,20 @@ async function initializeSignaling(io) {
         if (!deviceId) throw new Error("deviceId is required");
         await setStreaming(deviceId, true);
 
-        // Notify all viewers that stream is available
+        const viewers = getViewerSet(deviceId);
         io.to(`viewers:${deviceId}`).emit("stream:available", { deviceId });
-        logger.info(`Stream started for device: ${deviceId}`);
 
-        if (ack) ack({ ok: true });
+        for (const viewerSocketId of viewers) {
+          io.to(`device:${deviceId}`).emit("viewer:request-stream", {
+            viewerSocketId,
+            viewerLabel: "Waiting Web Viewer",
+            viewerCount: viewers.size,
+          });
+        }
+
+        logger.info(`Stream started for device: ${deviceId}; requested offers for ${viewers.size} viewer(s)`);
+
+        if (ack) ack({ ok: true, viewerCount: viewers.size });
       } catch (error) {
         logger.error(`Stream started error: ${error.message}`);
         if (ack) ack({ ok: false, error: error.message });
@@ -1184,70 +1209,6 @@ async function initializeSignaling(io) {
           viewerSocketId: socket.id,
           candidate,
         });
-      }
-    });
-
-
-    socket.on("viewer:authenticate", async ({ deviceId, password, viewerLabel }, ack) => {
-      try {
-        logger.info(`Viewer authentication attempt for device: ${deviceId}`);
-
-        const device = await Device.findOne({ deviceId });
-        if (!device) {
-          throw new Error("Device not found");
-        }
-
-        const valid = await device.verifyPassword(password);
-        if (!valid) {
-          throw new Error("Invalid password");
-        }
-
-        if (!device.isOnline) {
-          throw new Error("Device is offline");
-        }
-
-        const viewers = getViewerSet(deviceId);
-        const maxViewers = Number(process.env.MAX_VIEWERS_PER_DEVICE || 5);
-        if (viewers.size >= maxViewers) {
-          throw new Error("Maximum viewers reached");
-        }
-
-        viewers.add(socket.id);
-        viewerSockets.set(socket.id, { deviceId });
-        socket.join(`viewers:${deviceId}`);
-
-        await Session.create({
-          deviceId,
-          viewerSocketId: socket.id,
-          viewerLabel: viewerLabel || "Browser Viewer",
-          viewerIp: socket.handshake.address,
-          status: "pending",
-          startedAt: new Date(),
-        });
-
-        logger.info(`Viewer authenticated for device ${deviceId}, viewers: ${viewers.size}`);
-
-        if (ack) {
-          ack({
-            ok: true,
-            device: device.toPublicJSON(),
-            viewerSocketId: socket.id,
-          });
-        }
-
-        // If device is streaming, request stream immediately
-        if (device.isStreaming) {
-          io.to(`device:${deviceId}`).emit("viewer:request-stream", {
-            viewerSocketId: socket.id,
-            viewerLabel: viewerLabel || "Browser Viewer",
-            viewerCount: viewers.size,
-          });
-        }
-      } catch (error) {
-        logger.error(`Viewer authentication failed: ${error.message}`);
-        if (ack) {
-          ack({ ok: false, error: error.message });
-        }
       }
     });
 
