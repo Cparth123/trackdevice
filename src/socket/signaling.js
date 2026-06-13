@@ -286,8 +286,6 @@
 
 // module.exports = { initializeSignaling };
 
-
-
 const Device = require("../models/Device");
 const Session = require("../models/Session");
 const logger = require("../config/logger");
@@ -315,18 +313,30 @@ async function initializeSignaling(io) {
 
     socket.on("device:register", async (payload, ack) => {
       try {
-        const { deviceId, password } = payload || {};
+        console.log("DEVICE REGISTER PAYLOAD:", payload);
+
+        // FIX: Ensure deviceId and password are extracted correctly
+        const { deviceId, password, deviceName, platform, appVersion } = payload || {};
+
         if (!deviceId || !password) {
           throw new Error("deviceId and password are required");
         }
 
-        const device = await registerOrUpdateDevice(payload, socket.id);
+        // Register or update device with ALL fields
+        const device = await registerOrUpdateDevice({
+          deviceId,
+          password,
+          deviceName: deviceName || "Unknown Device",
+          platform: platform || "android",
+          appVersion: appVersion || "1.0"
+        }, socket.id);
+
         deviceSockets.set(socket.id, deviceId);
         socket.join(`device:${deviceId}`);
 
         ack?.({ ok: true, device: device.toPublicJSON() });
         socket.emit("device:registered", { device: device.toPublicJSON() });
-        console.log("DEVICE REGISTER PAYLOAD:", payload);
+        console.log(`Device registered successfully: ${deviceId}`);
       } catch (error) {
         logger.error(`device:register failed ${error.message}`);
         ack?.({ ok: false, error: error.message });
@@ -336,6 +346,9 @@ async function initializeSignaling(io) {
 
     socket.on("device:heartbeat", async ({ deviceId }, ack) => {
       try {
+        if (!deviceId) {
+          throw new Error("deviceId is required");
+        }
         await touchDevice(deviceId);
         ack?.({ ok: true, timestamp: Date.now() });
       } catch (error) {
@@ -345,7 +358,8 @@ async function initializeSignaling(io) {
 
     socket.on("device:data", async ({ deviceId, data }, ack) => {
       try {
-        if (!deviceSockets.has(socket.id)) {
+        const registeredDeviceId = deviceSockets.get(socket.id);
+        if (!registeredDeviceId || registeredDeviceId !== deviceId) {
           throw new Error("Only registered devices may send device data");
         }
 
@@ -358,6 +372,7 @@ async function initializeSignaling(io) {
         device.lastSeen = new Date();
         await device.save();
 
+        // Notify all viewers of this device
         io.to(`viewers:${deviceId}`).emit("device:data", {
           deviceId,
           data: device.deviceData,
@@ -371,9 +386,13 @@ async function initializeSignaling(io) {
 
     socket.on("stream:started", async ({ deviceId }, ack) => {
       try {
+        if (!deviceId) {
+          throw new Error("deviceId is required");
+        }
         await setStreaming(deviceId, true);
         io.to(`viewers:${deviceId}`).emit("stream:available", { deviceId });
         ack?.({ ok: true });
+        console.log(`Stream started for device: ${deviceId}`);
       } catch (error) {
         ack?.({ ok: false, error: error.message });
       }
@@ -381,12 +400,16 @@ async function initializeSignaling(io) {
 
     socket.on("stream:stopped", async ({ deviceId }, ack) => {
       try {
+        if (!deviceId) {
+          throw new Error("deviceId is required");
+        }
         await setStreaming(deviceId, false);
         io.to(`viewers:${deviceId}`).emit("stream:ended", {
           deviceId,
           reason: "Device stopped streaming",
         });
         ack?.({ ok: true });
+        console.log(`Stream stopped for device: ${deviceId}`);
       } catch (error) {
         ack?.({ ok: false, error: error.message });
       }
@@ -396,6 +419,8 @@ async function initializeSignaling(io) {
       "viewer:authenticate",
       async ({ deviceId, password, viewerLabel }, ack) => {
         try {
+          console.log(`Viewer authentication attempt for device: ${deviceId}`);
+
           const device = await Device.findOne({ deviceId });
           if (!device) {
             throw new Error("Device not found");
@@ -406,26 +431,17 @@ async function initializeSignaling(io) {
             throw new Error("Invalid password");
           }
 
-          // BUG 6 FIX: Previously viewers were allowed to authenticate and join
-          // the room even when the device had not started streaming yet. This caused
-          // them to receive stream:available, device:data and stream:ended events
-          // they shouldn't see, and the device would then immediately reject the
-          // viewer:request-stream anyway — creating a confusing error on the viewer side.
-          //
-          // Now we gate authentication on isStreaming. If the device is offline or
-          // not streaming, we reject immediately with a clear error so the viewer
-          // client can show a meaningful "not streaming yet" state instead of
-          // getting stuck on "waiting-device".
+          // Check if device is online and streaming
           if (!device.isOnline) {
             throw new Error("Device is offline");
           }
 
           if (!device.isStreaming) {
-            throw new Error("Device is not streaming yet");
+            throw new Error("Device is not streaming yet. Please ask the device owner to start streaming.");
           }
 
           const viewers = getViewerSet(deviceId);
-          const maxViewers = Number(process.env.MAX_VIEWERS_PER_DEVICE || 5);
+          const maxViewers = Number(process.env.MAX_VIEWERS_PER_DEVICE || 10);
           if (viewers.size >= maxViewers) {
             throw new Error("Maximum viewers reached");
           }
@@ -439,8 +455,7 @@ async function initializeSignaling(io) {
             viewerSocketId: socket.id,
             viewerLabel: viewerLabel || "Browser Viewer",
             viewerIp: socket.handshake.address,
-            // Device is confirmed streaming at this point so status is approved
-            status: "approved",
+            status: "pending",
             startedAt: new Date(),
           });
 
@@ -450,23 +465,16 @@ async function initializeSignaling(io) {
             viewerSocketId: socket.id,
           });
 
+          // Request stream from device
           io.to(`device:${deviceId}`).emit("viewer:request-stream", {
             viewerSocketId: socket.id,
             viewerLabel: viewerLabel || "Browser Viewer",
             viewerCount: viewers.size,
           });
 
-          console.log("VIEWER AUTH:", deviceId);
-
-          const devices = await Device.find({});
-          console.log(
-            "DATABASE DEVICES:",
-            devices.map((d) => ({
-              deviceId: d.deviceId,
-              online: d.isOnline,
-            })),
-          );
+          console.log(`Viewer authenticated for device ${deviceId}, viewers: ${viewers.size}`);
         } catch (error) {
+          console.error(`Viewer authentication failed: ${error.message}`);
           ack?.({ ok: false, error: error.message });
         }
       },
@@ -478,13 +486,12 @@ async function initializeSignaling(io) {
           {
             deviceId,
             viewerSocketId,
-            status: { $in: ["pending", "approved"] },
+            status: "pending",
           },
-          { $set: { status: "approved", startedAt: new Date() } },
+          { $set: { status: "approved" } }
         );
 
         io.to(viewerSocketId).emit("viewer:approved", { deviceId });
-        io.to(`device:${deviceId}`).emit("viewer:ready", { viewerSocketId });
         ack?.({ ok: true });
       } catch (error) {
         ack?.({ ok: false, error: error.message });
@@ -497,9 +504,9 @@ async function initializeSignaling(io) {
           {
             deviceId,
             viewerSocketId,
-            status: { $in: ["pending", "approved"] },
+            status: "pending",
           },
-          { $set: { status: "rejected", endedAt: new Date() } },
+          { $set: { status: "rejected", endedAt: new Date() } }
         );
         io.to(viewerSocketId).emit("viewer:rejected", { deviceId });
         ack?.({ ok: true });
@@ -510,6 +517,7 @@ async function initializeSignaling(io) {
 
     socket.on("webrtc:offer", ({ deviceId, viewerSocketId, offer }) => {
       io.to(viewerSocketId).emit("webrtc:offer", { deviceId, offer });
+      console.log(`WebRTC offer sent to viewer: ${viewerSocketId}`);
     });
 
     socket.on("webrtc:answer", async ({ deviceId, answer }, ack) => {
@@ -521,7 +529,7 @@ async function initializeSignaling(io) {
 
         await Session.updateOne(
           { deviceId, viewerSocketId: socket.id, status: "approved" },
-          { $set: { status: "active" } },
+          { $set: { status: "active" } }
         );
         ack?.({ ok: true });
       } catch (error) {
@@ -577,7 +585,7 @@ async function initializeSignaling(io) {
             viewerSocketId: socket.id,
             status: { $in: ["pending", "approved", "active"] },
           },
-          { $set: { status: "ended", endedAt: new Date() } },
+          { $set: { status: "ended", endedAt: new Date() } }
         );
 
         io.to(`device:${viewerEntry.deviceId}`).emit("viewer:disconnected", {

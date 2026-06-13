@@ -2,17 +2,21 @@ const Device = require('../models/Device');
 
 async function registerOrUpdateDevice(payload, socketId) {
   const { deviceId, password, deviceName, platform, appVersion } = payload;
+
+  console.log(`Registering/updating device: ${deviceId}`);
+
   let device = await Device.findOne({ deviceId });
 
   if (!device) {
+    console.log(`Creating new device: ${deviceId}`);
     const passwordHash = await Device.createPasswordHash(password);
     device = await Device.create({
       deviceId,
       passwordHash,
-      deviceName,
-      platform,
-      appVersion,
-      socketId,
+      deviceName: deviceName || "Unknown Device",
+      platform: platform || "android",
+      appVersion: appVersion || "1.0",
+      socketId: socketId,
       isOnline: true,
       isStreaming: false,
       lastSeen: new Date(),
@@ -20,11 +24,13 @@ async function registerOrUpdateDevice(payload, socketId) {
     return device;
   }
 
+  // Verify password for existing device
   const matches = await device.verifyPassword(password);
   if (!matches) {
     throw new Error('Invalid device password');
   }
 
+  // Update existing device
   device.socketId = socketId;
   device.isOnline = true;
   device.lastSeen = new Date();
@@ -32,6 +38,8 @@ async function registerOrUpdateDevice(payload, socketId) {
   device.platform = platform || device.platform;
   device.appVersion = appVersion || device.appVersion;
   await device.save();
+
+  console.log(`Updated existing device: ${deviceId}`);
   return device;
 }
 
@@ -51,6 +59,7 @@ async function setStreaming(deviceId, isStreaming) {
     { deviceId },
     { $set: { isStreaming, lastSeen: new Date() } }
   );
+  console.log(`Device ${deviceId} streaming: ${isStreaming}`);
 }
 
 async function updatePassword(deviceId, oldPassword, newPassword) {
